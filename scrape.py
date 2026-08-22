@@ -90,18 +90,38 @@ def fetch(url, referer=None, warm_up_url=None):
 
 # ---------------------------------------------------------------------------
 # State handling
+#
+# State now tracks two things:
+#   - "seen": every listing URL we've ever recorded, across all sites
+#   - "baselined": which site names have successfully completed at least
+#     one real scrape before
+#
+# Why: the first time ANY site successfully returns data - whether it's
+# brand new, or an old site that used to fail and just started working -
+# everything it finds looks "new" against empty history. Tracking baseline
+# status per site (not globally) means each site gets exactly one silent
+# baseline run automatically, whenever that happens, with no manual
+# seen_listings.json resets ever required again.
 # ---------------------------------------------------------------------------
 
-def load_seen():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE) as f:
-            return set(json.load(f))
-    return set()
+def load_state():
+    if not os.path.exists(STATE_FILE):
+        return set(), set()
+    with open(STATE_FILE) as f:
+        data = json.load(f)
+    if isinstance(data, list):
+        # Legacy format from before per-site baselining existed: a flat
+        # list of seen URLs with no baseline tracking. Treat every site as
+        # not-yet-baselined so each one gets exactly one silent catch-up
+        # cycle going forward - safer than assuming, costs one skipped
+        # cycle of alerts at most.
+        return set(data), set()
+    return set(data.get("seen", [])), set(data.get("baselined", []))
 
 
-def save_seen(seen):
+def save_state(seen, baselined):
     with open(STATE_FILE, "w") as f:
-        json.dump(sorted(seen), f, indent=2)
+        json.dump({"seen": sorted(seen), "baselined": sorted(baselined)}, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -348,7 +368,9 @@ REALMARK_SITES = {
     "Verra": "https://www.verra.nl/en/listings/rental?salesRentals=rentals",
 }
 
-# Other JS-rendered sites with their own bespoke frontends.
+# Other JS-rendered sites with their own bespoke frontends. These use the
+# generic (best-effort) extractor since we don't have a confirmed exact
+# URL pattern for them - worth spot-checking their results occasionally.
 OTHER_JS_SITES = {
     "Vesteda": (
         "https://www.vesteda.com/nl/woning-zoeken?placeType=1&sortType=0"
@@ -357,8 +379,12 @@ OTHER_JS_SITES = {
     ),
     "OostWest": "https://oostwestmakelaars.nl/en/huur",
     "REBO": "https://www.rebogroep.nl/nl/particulier/ons-aanbod/huren",
-    "Schep": "https://zoeken.schepvastgoedmanagers.nl/huur/woningen",
 }
+
+# Schep confirmed detail-page pattern:
+# https://zoeken.schepvastgoedmanagers.nl/{City}/{Street}/{numeric-id}/tehuur.html
+SCHEP_URL = "https://zoeken.schepvastgoedmanagers.nl/huur/woningen"
+SCHEP_PATTERN = r"/[^/]+/[^/]+/\d+/tehuur\.html"
 
 
 def scrape_realmark_site(base_url):
@@ -370,6 +396,13 @@ def scrape_realmark_site(base_url):
 def scrape_other_js_site(url):
     html = render_with_retry(url)
     return find_listings_generic(html, url, require_any_keyword=NEARBY_TOWNS)
+
+
+def scrape_schep():
+    html = render_with_retry(SCHEP_URL)
+    return find_listings(
+        html, SCHEP_URL, SCHEP_PATTERN, require_any_keyword=NEARBY_TOWNS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -501,6 +534,8 @@ for _name, _url in REALMARK_SITES.items():
 for _name, _url in OTHER_JS_SITES.items():
     SCRAPERS[_name] = (lambda u=_url: scrape_other_js_site(u))
 
+SCRAPERS["Schep"] = scrape_schep
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -511,10 +546,10 @@ def main():
     print(f"Playwright browser available: {browser_ok}")
 
     try:
-        seen = load_seen()
-        first_run = len(seen) == 0
+        seen, baselined = load_state()
         new_seen = set(seen)
-        new_matches = []
+        new_baselined = set(baselined)
+        matches_by_site = {}
 
         for name, scraper in SCRAPERS.items():
             try:
@@ -525,32 +560,43 @@ def main():
 
             print(f"{name}: found {len(listings)} listing(s) on the page(s) checked")
 
+            site_is_new = name not in baselined
+
             for item in listings:
                 url, price = item["url"], item["price"]
                 if url in seen:
                     continue
                 new_seen.add(url)
-                if first_run:
-                    continue  # don't flood alerts for pre-existing listings
+                if site_is_new:
+                    continue  # this site's first-ever successful run - silent baseline
                 if price is not None and price > MAX_PRICE:
                     continue
                 price_txt = f"€{price}" if price is not None else "price unknown"
-                new_matches.append(f"New listing on {name} - {price_txt}\n{url}")
+                matches_by_site.setdefault(name, []).append(f"{price_txt} - {url}")
+
+            if site_is_new:
+                print(f"  ({name}: first successful run - recording baseline, no alerts this time)")
+                new_baselined.add(name)
 
             # be a little polite between sites, especially the browser-rendered ones
             time.sleep(random.uniform(0.5, 1.5))
 
-        if first_run:
-            print("First run: recorded current listings as the baseline. "
-                  "No notifications sent this time - future new listings will alert.")
-        elif new_matches:
-            for msg in new_matches:
-                send_telegram(msg)
-            print(f"Sent {len(new_matches)} notification(s).")
-        else:
-            print("No new matching listings this run.")
+        total_matches = sum(len(v) for v in matches_by_site.values())
 
-        save_seen(new_seen)
+        if total_matches == 0:
+            print("No new matching listings this run.")
+        else:
+            for site_name, lines in matches_by_site.items():
+                # batch up to 10 listings per message and throttle sends,
+                # to stay well under Telegram's rate limits
+                for i in range(0, len(lines), 10):
+                    chunk = lines[i:i + 10]
+                    text = f"New listings on {site_name}:\n\n" + "\n\n".join(chunk)
+                    send_telegram(text)
+                    time.sleep(1.2)
+            print(f"Sent notifications for {total_matches} new listing(s).")
+
+        save_state(new_seen, new_baselined)
 
     finally:
         stop_browser()

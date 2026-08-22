@@ -13,6 +13,7 @@ SOURCES = {
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
     "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
     "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
+    "huurwoningen": "https://www.huurwoningen.nl/in/rijswijk/?price=600-1750&radius=5&filters%5Boffer_type%5D%5B0%5D=none",
 }
 
 NEARBY_TOWNS = [
@@ -169,11 +170,39 @@ def scrape_123wonen():
     )
 
 
+def scrape_huurwoningen():
+    base = SOURCES["huurwoningen"]
+    all_listings = []
+
+    html = fetch(base)
+    all_listings.extend(
+        find_listings(html, base, r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/",
+                      require_any_keyword=NEARBY_TOWNS)
+    )
+
+    for page in range(2, 4):
+        try:
+            page_html = fetch(f"{base}&page={page}", referer=base)
+            page_listings = find_listings(
+                page_html, base, r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/",
+                require_any_keyword=NEARBY_TOWNS,
+            )
+            if not page_listings:
+                break
+            all_listings.extend(page_listings)
+        except Exception as e:
+            print("huurwoningen.nl pagination stopped early:", e)
+            break
+
+    return all_listings
+
+
 SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
     "Funda": scrape_funda,
     "123Wonen": scrape_123wonen,
+    "Huurwoningen.nl": scrape_huurwoningen,
 }
 
 

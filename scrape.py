@@ -106,7 +106,7 @@ def fetch(url, referer=None, warm_up_url=None):
 
 def load_state():
     if not os.path.exists(STATE_FILE):
-        return set(), set()
+        return set(), set(), None
     with open(STATE_FILE) as f:
         data = json.load(f)
     if isinstance(data, list):
@@ -115,13 +115,21 @@ def load_state():
         # not-yet-baselined so each one gets exactly one silent catch-up
         # cycle going forward - safer than assuming, costs one skipped
         # cycle of alerts at most.
-        return set(data), set()
-    return set(data.get("seen", [])), set(data.get("baselined", []))
+        return set(data), set(), None
+    return (
+        set(data.get("seen", [])),
+        set(data.get("baselined", [])),
+        data.get("last_update_id"),
+    )
 
 
-def save_state(seen, baselined):
+def save_state(seen, baselined, last_update_id):
     with open(STATE_FILE, "w") as f:
-        json.dump({"seen": sorted(seen), "baselined": sorted(baselined)}, f, indent=2)
+        json.dump({
+            "seen": sorted(seen),
+            "baselined": sorted(baselined),
+            "last_update_id": last_update_id,
+        }, f, indent=2)
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +152,57 @@ def send_telegram(text):
             print("Telegram send failed:", r.status_code, r.text)
     except Exception as e:
         print("Telegram send error:", e)
+
+
+def build_welcome_text():
+    return (
+        "Hi! 👋 I'm your Rijswijk apartment watcher.\n\n"
+        f"I check {len(SCRAPERS)} rental sites every 15 minutes - Pararius, VBT, Funda, "
+        "123Wonen, Huurwoningen.nl, NationaalGrondbezit, Devilee, Real Estate Partners, "
+        "Bjornd, Verra, Vesteda, Oost West, REBO, and Schep - and I'll message you the "
+        f"moment something new shows up under €{MAX_PRICE}, roughly within 10km of Rijswijk.\n\n"
+        "No need to do anything else - just leave me running."
+    )
+
+GREETING_TRIGGERS = {"/start", "hi", "hello", "hallo", "hoi", "hey"}
+
+
+def handle_incoming_messages(last_update_id):
+    """Poll for any messages you've sent the bot since the last run (e.g.
+    /start after clearing chat history, or just saying hi) and reply with
+    a short intro. Returns the new last_update_id to persist."""
+    if not TELEGRAM_TOKEN:
+        return last_update_id
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+        params = {"timeout": 0}
+        if last_update_id is not None:
+            params["offset"] = last_update_id + 1
+        r = requests.get(url, params=params, timeout=15)
+        data = r.json()
+        if not data.get("ok"):
+            print("getUpdates failed:", data)
+            return last_update_id
+
+        newest_id = last_update_id
+        for update in data.get("result", []):
+            newest_id = update["update_id"] if newest_id is None else max(newest_id, update["update_id"])
+            msg = update.get("message", {})
+            text = (msg.get("text") or "").strip().lower()
+            chat_id = msg.get("chat", {}).get("id")
+
+            if chat_id is None:
+                continue
+            # Only reply to the configured chat, and only to greeting-like messages
+            if TELEGRAM_CHAT_ID and str(chat_id) != str(TELEGRAM_CHAT_ID):
+                continue
+            if text in GREETING_TRIGGERS:
+                send_telegram(build_welcome_text())
+
+        return newest_id
+    except Exception as e:
+        print("Telegram getUpdates error:", e)
+        return last_update_id
 
 
 # ---------------------------------------------------------------------------
@@ -546,7 +605,10 @@ def main():
     print(f"Playwright browser available: {browser_ok}")
 
     try:
-        seen, baselined = load_state()
+        seen, baselined, last_update_id = load_state()
+
+        new_last_update_id = handle_incoming_messages(last_update_id)
+
         new_seen = set(seen)
         new_baselined = set(baselined)
         matches_by_site = {}
@@ -596,7 +658,7 @@ def main():
                     time.sleep(1.2)
             print(f"Sent notifications for {total_matches} new listing(s).")
 
-        save_state(new_seen, new_baselined)
+        save_state(new_seen, new_baselined, new_last_update_id)
 
     finally:
         stop_browser()

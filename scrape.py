@@ -14,6 +14,7 @@ SOURCES = {
     "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
     "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
     "huurwoningen": "https://www.huurwoningen.nl/in/rijswijk/?price=600-1750&radius=5&filters%5Boffer_type%5D%5B0%5D=none",
+    "nationaalgrondbezit": "https://nationaalgrondbezit.nl/huuraanbod",
 }
 
 NEARBY_TOWNS = [
@@ -197,12 +198,22 @@ def scrape_huurwoningen():
     return all_listings
 
 
+def scrape_nationaalgrondbezit():
+    url = SOURCES["nationaalgrondbezit"]
+    html = fetch(url)
+    return find_listings(
+        html, url, r"/huuraanbod/[^/\"]+/[a-z0-9-]+",
+        require_any_keyword=NEARBY_TOWNS,
+    )
+
+
 SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
     "Funda": scrape_funda,
     "123Wonen": scrape_123wonen,
     "Huurwoningen.nl": scrape_huurwoningen,
+    "NationaalGrondbezit": scrape_nationaalgrondbezit,
 }
 
 

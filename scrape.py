@@ -6,16 +6,14 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-# ---------------------------------------------------------------------------
-# CONFIG - tweak these to change what counts as a match
-# ---------------------------------------------------------------------------
-
 MAX_PRICE = 2000
 
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
     "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
+    "housinganywhere": "https://housinganywhere.com/s/Rijswijk--Netherlands/apartment-for-rent",
+    "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk/sort/newest",
 }
 
 NEARBY_TOWNS = [
@@ -95,7 +93,7 @@ def parse_price(text):
         return None
 
 
-def find_listings(html, base_url, url_pattern, require_any_keyword=None):
+def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude_any_keyword=None):
     soup = BeautifulSoup(html, "html.parser")
     results = {}
     for a in soup.find_all("a", href=re.compile(url_pattern)):
@@ -111,10 +109,13 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None):
             container = container.parent
             text = container.get_text(" ", strip=True)
 
-        if require_any_keyword:
-            text_low = text.lower()
-            if not any(town in text_low for town in require_any_keyword):
-                continue
+        text_low = text.lower()
+
+        if require_any_keyword and not any(town in text_low for town in require_any_keyword):
+            continue
+
+        if exclude_any_keyword and any(word in text_low for word in exclude_any_keyword):
+            continue
 
         price = parse_price(text)
         if href not in results or (results[href]["price"] is None and price is not None):
@@ -159,10 +160,30 @@ def scrape_funda():
     return find_listings(html, url, r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/")
 
 
+def scrape_housinganywhere():
+    url = SOURCES["housinganywhere"]
+    html = fetch(url)
+    return find_listings(
+        html, url, r"/room/[A-Za-z0-9]+/", require_any_keyword=NEARBY_TOWNS
+    )
+
+
+def scrape_123wonen():
+    url = SOURCES["123wonen"]
+    html = fetch(url, warm_up_url="https://www.123wonen.nl/")
+    return find_listings(
+        html, url, r"/huur/[a-z0-9+%.-]+/[a-z0-9+%.-]+/[a-z0-9+%.-]+",
+        require_any_keyword=NEARBY_TOWNS,
+        exclude_any_keyword=["verhuurd"],
+    )
+
+
 SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
     "Funda": scrape_funda,
+    "HousingAnywhere": scrape_housinganywhere,
+    "123Wonen": scrape_123wonen,
 }
 
 

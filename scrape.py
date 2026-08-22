@@ -99,26 +99,35 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None):
     """Find links matching url_pattern, then read price/context from the
     surrounding block of text. Deliberately avoids relying on CSS class
     names, since those change often - only the link pattern and the
-    presence of a euro sign nearby need to stay stable."""
+    presence of a euro sign nearby need to stay stable.
+
+    Climbs up the page structure one level at a time and stops as soon as
+    it finds a block containing a euro sign, so it grabs the smallest
+    (most specific) container rather than a big block that might mix in
+    a neighboring listing's price."""
     soup = BeautifulSoup(html, "html.parser")
     results = {}
     for a in soup.find_all("a", href=re.compile(url_pattern)):
         href = urljoin(base_url, a["href"])
+
+        text = a.get_text(" ", strip=True)
         container = a
-        for _ in range(4):
-            if container.parent is not None:
-                container = container.parent
-        text = container.get_text(" ", strip=True)
+        for _ in range(8):
+            if "€" in text:
+                break
+            if container.parent is None:
+                break
+            container = container.parent
+            text = container.get_text(" ", strip=True)
 
         if require_any_keyword:
             text_low = text.lower()
             if not any(town in text_low for town in require_any_keyword):
                 continue
 
-        results[href] = {
-            "url": href,
-            "price": parse_price(text),
-        }
+        price = parse_price(text)
+        if href not in results or (results[href]["price"] is None and price is not None):
+            results[href] = {"url": href, "price": price}
     return list(results.values())
 
 
@@ -143,7 +152,6 @@ def scrape_vbt():
         find_listings(r.text, base, r"/woning/[a-z0-9-]+$", require_any_keyword=NEARBY_TOWNS)
     )
 
-    # VBT paginates as /woningen/2, /woningen/3, ... check a few more pages
     for page in range(2, 6):
         try:
             r = requests.get(f"{base}/{page}", headers=HEADERS, timeout=20)
@@ -181,8 +189,8 @@ SCRAPERS = {
 # ---------------------------------------------------------------------------
 
 def main():
-    first_run = not os.path.exists(STATE_FILE)
     seen = load_seen()
+    first_run = len(seen) == 0
     new_seen = set(seen)
     new_matches = []
 
@@ -201,7 +209,7 @@ def main():
                 continue
             new_seen.add(url)
             if first_run:
-                continue  # don't flood alerts for pre-existing listings
+                continue
             if price is not None and price > MAX_PRICE:
                 continue
             price_txt = f"€{price}" if price is not None else "price unknown"

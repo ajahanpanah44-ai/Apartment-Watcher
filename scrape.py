@@ -150,6 +150,8 @@ def send_telegram(text):
         )
         if r.status_code != 200:
             print("Telegram send failed:", r.status_code, r.text)
+        else:
+            print(f"Telegram message sent OK ({len(text)} chars)")
     except Exception as e:
         print("Telegram send error:", e)
 
@@ -172,6 +174,7 @@ def handle_incoming_messages(last_update_id):
     /start after clearing chat history, or just saying hi) and reply with
     a short intro. Returns the new last_update_id to persist."""
     if not TELEGRAM_TOKEN:
+        print("Telegram: no bot token configured, skipping incoming message check")
         return last_update_id
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
@@ -181,23 +184,34 @@ def handle_incoming_messages(last_update_id):
         r = requests.get(url, params=params, timeout=15)
         data = r.json()
         if not data.get("ok"):
-            print("getUpdates failed:", data)
+            print("Telegram getUpdates failed:", data)
             return last_update_id
 
+        updates = data.get("result", [])
+        print(f"Telegram getUpdates: {len(updates)} update(s) since last_update_id={last_update_id}")
+
         newest_id = last_update_id
-        for update in data.get("result", []):
+        for update in updates:
             newest_id = update["update_id"] if newest_id is None else max(newest_id, update["update_id"])
             msg = update.get("message", {})
-            text = (msg.get("text") or "").strip().lower()
+            text_raw = msg.get("text") or ""
+            text = text_raw.strip().lower()
             chat_id = msg.get("chat", {}).get("id")
+
+            print(f"  update_id={update['update_id']} chat_id={chat_id!r} "
+                  f"configured_chat_id={TELEGRAM_CHAT_ID!r} text={text_raw!r}")
 
             if chat_id is None:
                 continue
             # Only reply to the configured chat, and only to greeting-like messages
             if TELEGRAM_CHAT_ID and str(chat_id) != str(TELEGRAM_CHAT_ID):
+                print(f"  -> skipped: chat_id does not match configured TELEGRAM_CHAT_ID")
                 continue
             if text in GREETING_TRIGGERS:
+                print("  -> matched greeting trigger, sending welcome reply")
                 send_telegram(build_welcome_text())
+            else:
+                print(f"  -> {text_raw!r} did not match any greeting trigger, ignoring")
 
         return newest_id
     except Exception as e:

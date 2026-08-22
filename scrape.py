@@ -31,12 +31,31 @@ NEARBY_TOWNS = [
 ]
 
 STATE_FILE = "seen_listings.json"
-HEADERS = {
+
+SESSION = requests.Session()
+SESSION.headers.update({
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    )
-}
+    ),
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Connection": "keep-alive",
+})
+
+
+def fetch(url, referer=None, warm_up_url=None):
+    """GET a page, optionally visiting a homepage first to pick up cookies
+    and look like a normal browser session rather than a bare script."""
+    if warm_up_url:
+        try:
+            SESSION.get(warm_up_url, timeout=15)
+        except Exception:
+            pass
+    headers = {"Referer": referer} if referer else {}
+    r = SESSION.get(url, headers=headers, timeout=20)
+    r.raise_for_status()
+    return r.text
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
@@ -137,28 +156,24 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None):
 
 def scrape_pararius():
     url = SOURCES["pararius"]
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    return find_listings(r.text, url, r"/(appartement|huis|studio|kamer)-te-huur/")
+    html = fetch(url, warm_up_url="https://www.pararius.nl/")
+    return find_listings(html, url, r"/(appartement|huis|studio|kamer)-te-huur/")
 
 
 def scrape_vbt():
     base = SOURCES["vbt"]
     all_listings = []
 
-    r = requests.get(base, headers=HEADERS, timeout=20)
-    r.raise_for_status()
+    html = fetch(base)
     all_listings.extend(
-        find_listings(r.text, base, r"/woning/[a-z0-9-]+$", require_any_keyword=NEARBY_TOWNS)
+        find_listings(html, base, r"/woning/[a-z0-9-]+$", require_any_keyword=NEARBY_TOWNS)
     )
 
     for page in range(2, 6):
         try:
-            r = requests.get(f"{base}/{page}", headers=HEADERS, timeout=20)
-            if r.status_code != 200:
-                break
+            page_html = fetch(f"{base}/{page}", referer=base)
             page_listings = find_listings(
-                r.text, base, r"/woning/[a-z0-9-]+$", require_any_keyword=NEARBY_TOWNS
+                page_html, base, r"/woning/[a-z0-9-]+$", require_any_keyword=NEARBY_TOWNS
             )
             if not page_listings:
                 break
@@ -172,9 +187,8 @@ def scrape_vbt():
 
 def scrape_funda():
     url = SOURCES["funda"]
-    r = requests.get(url, headers=HEADERS, timeout=20)
-    r.raise_for_status()
-    return find_listings(r.text, url, r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/")
+    html = fetch(url, warm_up_url="https://www.funda.nl/")
+    return find_listings(html, url, r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/")
 
 
 SCRAPERS = {

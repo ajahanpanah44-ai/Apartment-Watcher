@@ -12,8 +12,7 @@ SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
     "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
-    "housinganywhere": "https://housinganywhere.com/s/Rijswijk--Netherlands/apartment-for-rent",
-    "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk/sort/newest",
+    "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
 }
 
 NEARBY_TOWNS = [
@@ -160,14 +159,6 @@ def scrape_funda():
     return find_listings(html, url, r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/")
 
 
-def scrape_housinganywhere():
-    url = SOURCES["housinganywhere"]
-    html = fetch(url)
-    return find_listings(
-        html, url, r"/room/[A-Za-z0-9]+/", require_any_keyword=NEARBY_TOWNS
-    )
-
-
 def scrape_123wonen():
     url = SOURCES["123wonen"]
     html = fetch(url, warm_up_url="https://www.123wonen.nl/")
@@ -182,7 +173,6 @@ SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
     "Funda": scrape_funda,
-    "HousingAnywhere": scrape_housinganywhere,
     "123Wonen": scrape_123wonen,
 }
 

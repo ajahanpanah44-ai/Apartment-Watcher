@@ -12,18 +12,12 @@ from bs4 import BeautifulSoup
 
 MAX_PRICE = 2000
 
-# Tip: the most reliable way to get these URLs exactly right is to open each
-# site in your browser, set the filters you want (price, radius, etc.), then
-# copy the resulting URL from the address bar and paste it here.
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
     "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
 }
 
-# VBT lists properties nationwide with no radius filter in the URL, so we
-# filter by city/town name instead. These are roughly within 10km of
-# Rijswijk - add or remove towns as you like.
 NEARBY_TOWNS = [
     "rijswijk", "den haag", "'s-gravenhage", "s-gravenhage", "delft",
     "voorburg", "leidschendam", "wateringen", "nootdorp", "pijnacker",
@@ -45,8 +39,6 @@ SESSION.headers.update({
 
 
 def fetch(url, referer=None, warm_up_url=None):
-    """GET a page, optionally visiting a homepage first to pick up cookies
-    and look like a normal browser session rather than a bare script."""
     if warm_up_url:
         try:
             SESSION.get(warm_up_url, timeout=15)
@@ -57,13 +49,10 @@ def fetch(url, referer=None, warm_up_url=None):
     r.raise_for_status()
     return r.text
 
+
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
-
-# ---------------------------------------------------------------------------
-# State handling
-# ---------------------------------------------------------------------------
 
 def load_seen():
     if os.path.exists(STATE_FILE):
@@ -76,10 +65,6 @@ def save_seen(seen):
     with open(STATE_FILE, "w") as f:
         json.dump(sorted(seen), f, indent=2)
 
-
-# ---------------------------------------------------------------------------
-# Telegram
-# ---------------------------------------------------------------------------
 
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -99,12 +84,8 @@ def send_telegram(text):
         print("Telegram send error:", e)
 
 
-# ---------------------------------------------------------------------------
-# Generic scraping helpers
-# ---------------------------------------------------------------------------
-
 def parse_price(text):
-    m = re.search(r"€\s?([\d.,]{3,9})", text)
+    m = re.search(r"€\s*([\d.,]{3,9})", text)
     if not m:
         return None
     raw = m.group(1).replace(".", "").split(",")[0]
@@ -115,15 +96,6 @@ def parse_price(text):
 
 
 def find_listings(html, base_url, url_pattern, require_any_keyword=None):
-    """Find links matching url_pattern, then read price/context from the
-    surrounding block of text. Deliberately avoids relying on CSS class
-    names, since those change often - only the link pattern and the
-    presence of a euro sign nearby need to stay stable.
-
-    Climbs up the page structure one level at a time and stops as soon as
-    it finds a block containing a euro sign, so it grabs the smallest
-    (most specific) container rather than a big block that might mix in
-    a neighboring listing's price."""
     soup = BeautifulSoup(html, "html.parser")
     results = {}
     for a in soup.find_all("a", href=re.compile(url_pattern)):
@@ -149,10 +121,6 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None):
             results[href] = {"url": href, "price": price}
     return list(results.values())
 
-
-# ---------------------------------------------------------------------------
-# Per-site scrapers
-# ---------------------------------------------------------------------------
 
 def scrape_pararius():
     url = SOURCES["pararius"]
@@ -197,10 +165,6 @@ SCRAPERS = {
     "Funda": scrape_funda,
 }
 
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
 
 def main():
     seen = load_seen()

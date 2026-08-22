@@ -1,13 +1,26 @@
 import os
 import re
 import json
-from urllib.parse import urljoin
+import time
+import random
+from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
+# ---------------------------------------------------------------------------
+# CONFIG
+# ---------------------------------------------------------------------------
+
 MAX_PRICE = 1700
 
+NEARBY_TOWNS = [
+    "rijswijk", "den haag", "'s-gravenhage", "s-gravenhage",
+    "delft", "voorburg", "leidschendam", "wateringen", "nootdorp",
+    "pijnacker", "schipluiden", "ypenburg",
+]
+
+# Fast, lightweight sources - plain HTTP requests, no browser needed.
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
@@ -17,20 +30,19 @@ SOURCES = {
     "nationaalgrondbezit": "https://nationaalgrondbezit.nl/huuraanbod",
 }
 
-NEARBY_TOWNS = [
-    "rijswijk", "den haag", "'s-gravenhage", "s-gravenhage", "delft",
-    "voorburg", "leidschendam", "wateringen", "nootdorp", "pijnacker",
-    "schipluiden", "ypenburg",
-]
-
 STATE_FILE = "seen_listings.json"
+
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
+
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+)
 
 SESSION = requests.Session()
 SESSION.headers.update({
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-    ),
+    "User-Agent": BROWSER_USER_AGENT,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
     "Accept-Encoding": "gzip, deflate, br",
@@ -46,8 +58,25 @@ SESSION.headers.update({
     "sec-ch-ua-platform": '"Windows"',
 })
 
+# Common junk paths to never treat as a listing, used by the generic
+# (browser-rendered) extractor.
+NAV_PATH_EXCLUDE = [
+    "contact", "privacy", "cookie", "voorwaarden", "terms", "about",
+    "over-ons", "faq", "vacature", "vacatures", "nieuws", "news",
+    "service", "services", "offices", "office", "reviews", "review",
+    "sale", "koop", "kopen", "sold", "verkocht", "login", "inloggen",
+    "registreren", "account", "sitemap", "algemene-voorwaarden",
+    "disclaimer", "privacybeleid", "werkwijze", "vestig",
+]
+
+
+# ---------------------------------------------------------------------------
+# Plain HTTP fetch (fast path)
+# ---------------------------------------------------------------------------
 
 def fetch(url, referer=None, warm_up_url=None):
+    """GET a page with plain requests. Optionally visits a homepage first
+    to pick up cookies and look like a normal browser session."""
     if warm_up_url:
         try:
             SESSION.get(warm_up_url, timeout=15)
@@ -59,9 +88,9 @@ def fetch(url, referer=None, warm_up_url=None):
     return r.text
 
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
-
+# ---------------------------------------------------------------------------
+# State handling
+# ---------------------------------------------------------------------------
 
 def load_seen():
     if os.path.exists(STATE_FILE):
@@ -74,6 +103,10 @@ def save_seen(seen):
     with open(STATE_FILE, "w") as f:
         json.dump(sorted(seen), f, indent=2)
 
+
+# ---------------------------------------------------------------------------
+# Telegram
+# ---------------------------------------------------------------------------
 
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -93,6 +126,10 @@ def send_telegram(text):
         print("Telegram send error:", e)
 
 
+# ---------------------------------------------------------------------------
+# Shared parsing helpers
+# ---------------------------------------------------------------------------
+
 def parse_price(text):
     m = re.search(r"€\s*([\d.,]{3,9})", text)
     if not m:
@@ -105,6 +142,10 @@ def parse_price(text):
 
 
 def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude_any_keyword=None):
+    """Precise extractor for sites where we know the exact detail-page URL
+    pattern. Climbs from each matching link up to the nearest ancestor
+    that contains a euro sign, to read the price without needing CSS
+    class names (which change often)."""
     soup = BeautifulSoup(html, "html.parser")
     results = {}
     for a in soup.find_all("a", href=re.compile(url_pattern)):
@@ -122,10 +163,9 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude
 
         text_low = text.lower()
 
-        if require_any_keyword and not any(town in text_low for town in require_any_keyword):
+        if require_any_keyword and not any(t in text_low for t in require_any_keyword):
             continue
-
-        if exclude_any_keyword and any(word in text_low for word in exclude_any_keyword):
+        if exclude_any_keyword and any(w in text_low for w in exclude_any_keyword):
             continue
 
         price = parse_price(text)
@@ -134,10 +174,223 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude
     return list(results.values())
 
 
+def find_listings_generic(html, base_url, require_any_keyword=None):
+    """Fallback extractor for sites we've never test-scraped and don't
+    know exact URL patterns for. Keeps any same-domain link that isn't
+    obvious navigation junk and has a euro sign somewhere in its nearby
+    text - structural signal instead of guessed CSS classes or paths."""
+    soup = BeautifulSoup(html, "html.parser")
+    base_domain = urlparse(base_url).netloc
+    results = {}
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
+            continue
+
+        full = urljoin(base_url, href)
+        parsed = urlparse(full)
+        if parsed.netloc != base_domain:
+            continue
+
+        path_low = parsed.path.lower()
+        if any(f"/{kw}" in path_low or path_low.strip("/") == kw for kw in NAV_PATH_EXCLUDE):
+            continue
+        if len(parsed.path.strip("/")) < 3:
+            continue  # homepage or near-empty path, not a listing
+
+        text = a.get_text(" ", strip=True)
+        container = a
+        for _ in range(6):
+            if "€" in text:
+                break
+            if container.parent is None:
+                break
+            container = container.parent
+            text = container.get_text(" ", strip=True)
+
+        if "€" not in text:
+            continue
+
+        text_low = text.lower()
+        if require_any_keyword and not any(t in text_low for t in require_any_keyword):
+            continue
+
+        price = parse_price(text)
+        if full not in results or (results[full]["price"] is None and price is not None):
+            results[full] = {"url": full, "price": price}
+
+    return list(results.values())
+
+
+# ---------------------------------------------------------------------------
+# Playwright (real browser) support
+# ---------------------------------------------------------------------------
+
+_PLAYWRIGHT_CTX = {"pw": None, "browser": None, "available": False}
+
+
+def start_browser():
+    """Launch one shared headless browser for the whole run. Returns True
+    if successful; if Playwright/Chromium isn't available, every browser-
+    dependent scraper below will simply fail gracefully and get skipped."""
+    try:
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().start()
+        browser = pw.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+            ],
+        )
+        _PLAYWRIGHT_CTX["pw"] = pw
+        _PLAYWRIGHT_CTX["browser"] = browser
+        _PLAYWRIGHT_CTX["available"] = True
+        return True
+    except Exception as e:
+        print(f"Playwright unavailable, JS-rendered sites will be skipped: {e}")
+        return False
+
+
+def stop_browser():
+    try:
+        if _PLAYWRIGHT_CTX["browser"]:
+            _PLAYWRIGHT_CTX["browser"].close()
+        if _PLAYWRIGHT_CTX["pw"]:
+            _PLAYWRIGHT_CTX["pw"].stop()
+    except Exception:
+        pass
+
+
+def render_page(url, wait_ms=3500, timeout_ms=45000):
+    """Load a URL in a real (headless) browser and return the fully
+    rendered HTML, including anything built by client-side JavaScript."""
+    if not _PLAYWRIGHT_CTX["available"]:
+        raise RuntimeError("Playwright browser is not available")
+
+    browser = _PLAYWRIGHT_CTX["browser"]
+    context = browser.new_context(
+        user_agent=BROWSER_USER_AGENT,
+        locale="nl-NL",
+        viewport={"width": 1366, "height": 900},
+        timezone_id="Europe/Amsterdam",
+    )
+    # small stealth touch: hide the automation flag most basic bot checks look for
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined});"
+    )
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="networkidle", timeout=timeout_ms)
+    except Exception as e:
+        print(f"  (render warning for {url}: {e}, using what loaded so far)")
+    page.wait_for_timeout(wait_ms)
+    html = page.content()
+    context.close()
+    return html
+
+
+def render_with_retry(url, attempts=2, **kwargs):
+    last_err = None
+    for i in range(attempts):
+        try:
+            return render_page(url, **kwargs)
+        except Exception as e:
+            last_err = e
+            time.sleep(1.5)
+    raise last_err
+
+
+# ---------------------------------------------------------------------------
+# Shared filter-builder for the "Realmark-style" platform used by
+# Devilee, Real Estate Partners, Bjornd and Verra - they all serialize
+# identical filter-state JSON into the URL hash fragment.
+# ---------------------------------------------------------------------------
+
+def build_realmark_hash(price_max=MAX_PRICE, sort="addedDesc"):
+    state = {
+        "view": "grid",
+        "sort": sort,
+        "searchTerms": ["address", "zipcode", "city", "state"],
+        "address": "",
+        "title": "",
+        "salesRentals": "rentals",
+        "salesPriceMin": 0, "salesPriceMax": 9999999999,
+        "devSalesPriceMin": 0, "devSalesPriceMax": 9999999999,
+        "rentalsPriceMin": 0, "rentalsPriceMax": price_max,
+        "devRentalsPriceMin": 0, "devRentalsPriceMax": 9999999999,
+        "surfaceMin": 0, "surfaceMax": 9999999999,
+        "unitsMin": 0, "unitsMax": 9999999999,
+        "devSurfaceMin": 0, "devSurfaceMax": 9999999999,
+        "plotSurfaceMin": 0, "plotSurfaceMax": 9999999999,
+        "roomsMin": 0, "roomsMax": 9999999999,
+        "bedroomsMin": 0, "bedroomsMax": 9999999999,
+        "bathroomsMin": 0, "bathroomsMax": 9999999999,
+        "city": [], "district": [], "mainType": [], "buildType": [],
+        "tag": [], "country": [], "state": [], "listingsType": [],
+        "ignoreType": [], "categories": [],
+        "status": "available", "statusStrict": False,
+        "includeIsBought": False,
+        "user": "", "branch": "",
+        "apartmentType": "", "houseType": "",
+        "archiveTime": 15778463, "page": 1, "grouped": True,
+    }
+    return "#" + json.dumps(state, separators=(",", ":")).replace('"', "%22")
+
+
+# Sites on the shared JS platform - one hash builder covers all of them.
+REALMARK_SITES = {
+    "Devilee": "https://www.devilee.nl/nl/aanbod/tehuur?salesRentals=rental",
+    "RealEstatePartners": "https://www.real-estatepartners.nl/en/houses-for-rent-thehague?salesRentals=rentals",
+    "Bjornd": "https://www.bjornd.nl/en/rental-listings?salesRentals=rentals",
+    "Verra": "https://www.verra.nl/en/listings/rental?salesRentals=rentals",
+}
+
+# Other JS-rendered sites with their own bespoke frontends.
+OTHER_JS_SITES = {
+    "Vesteda": (
+        "https://www.vesteda.com/nl/woning-zoeken?placeType=1&sortType=0"
+        "&radius=10&s=Rijswijk%2C+Nederland&sc=woning"
+        "&latitude=52.035576&longitude=4.3128963&filters=&priceFrom=0&priceTo=1700"
+    ),
+    "OostWest": "https://oostwestmakelaars.nl/en/huur",
+    "REBO": "https://www.rebogroep.nl/nl/particulier/ons-aanbod/huren",
+    "Schep": "https://zoeken.schepvastgoedmanagers.nl/huur/woningen",
+}
+
+
+def scrape_realmark_site(base_url):
+    url = base_url + build_realmark_hash(MAX_PRICE)
+    html = render_with_retry(url)
+    return find_listings_generic(html, base_url, require_any_keyword=NEARBY_TOWNS)
+
+
+def scrape_other_js_site(url):
+    html = render_with_retry(url)
+    return find_listings_generic(html, url, require_any_keyword=NEARBY_TOWNS)
+
+
+# ---------------------------------------------------------------------------
+# Fast (plain-request) scrapers, each with a browser-rendered fallback if
+# the site returns a 403 - some sites block plain scripts but let a real
+# browser through; others block by IP regardless, in which case this
+# fallback will also fail and get logged, which is expected.
+# ---------------------------------------------------------------------------
+
 def scrape_pararius():
     url = SOURCES["pararius"]
-    html = fetch(url, warm_up_url="https://www.pararius.nl/")
-    return find_listings(html, url, r"/(appartement|huis|studio|kamer)-te-huur/")
+    pattern = r"/(appartement|huis|studio|kamer)-te-huur/"
+    try:
+        html = fetch(url, warm_up_url="https://www.pararius.nl/")
+        return find_listings(html, url, pattern)
+    except requests.exceptions.HTTPError:
+        if _PLAYWRIGHT_CTX["available"]:
+            print("  Pararius: plain request blocked, retrying with real browser...")
+            html = render_with_retry(url)
+            return find_listings(html, url, pattern)
+        raise
 
 
 def scrape_vbt():
@@ -167,8 +420,16 @@ def scrape_vbt():
 
 def scrape_funda():
     url = SOURCES["funda"]
-    html = fetch(url, warm_up_url="https://www.funda.nl/")
-    return find_listings(html, url, r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/")
+    pattern = r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/"
+    try:
+        html = fetch(url, warm_up_url="https://www.funda.nl/")
+        return find_listings(html, url, pattern)
+    except requests.exceptions.HTTPError:
+        if _PLAYWRIGHT_CTX["available"]:
+            print("  Funda: plain request blocked, retrying with real browser...")
+            html = render_with_retry(url)
+            return find_listings(html, url, pattern)
+        raise
 
 
 def scrape_123wonen():
@@ -183,20 +444,24 @@ def scrape_123wonen():
 
 def scrape_huurwoningen():
     base = SOURCES["huurwoningen"]
+    pattern = r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/"
     all_listings = []
+    try:
+        html = fetch(base, warm_up_url="https://www.huurwoningen.nl/")
+    except requests.exceptions.HTTPError:
+        if _PLAYWRIGHT_CTX["available"]:
+            print("  Huurwoningen.nl: plain request blocked, retrying with real browser...")
+            html = render_with_retry(base)
+        else:
+            raise
 
-    html = fetch(base, warm_up_url="https://www.huurwoningen.nl/")
-    all_listings.extend(
-        find_listings(html, base, r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/",
-                      require_any_keyword=NEARBY_TOWNS)
-    )
+    all_listings.extend(find_listings(html, base, pattern, require_any_keyword=NEARBY_TOWNS))
 
     for page in range(2, 4):
         try:
             page_html = fetch(f"{base}&page={page}", referer=base)
             page_listings = find_listings(
-                page_html, base, r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/",
-                require_any_keyword=NEARBY_TOWNS,
+                page_html, base, pattern, require_any_keyword=NEARBY_TOWNS,
             )
             if not page_listings:
                 break
@@ -217,6 +482,10 @@ def scrape_nationaalgrondbezit():
     )
 
 
+# ---------------------------------------------------------------------------
+# Build the final list of scrapers to run
+# ---------------------------------------------------------------------------
+
 SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
@@ -226,45 +495,65 @@ SCRAPERS = {
     "NationaalGrondbezit": scrape_nationaalgrondbezit,
 }
 
+for _name, _url in REALMARK_SITES.items():
+    SCRAPERS[_name] = (lambda u=_url: scrape_realmark_site(u))
+
+for _name, _url in OTHER_JS_SITES.items():
+    SCRAPERS[_name] = (lambda u=_url: scrape_other_js_site(u))
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 def main():
-    seen = load_seen()
-    first_run = len(seen) == 0
-    new_seen = set(seen)
-    new_matches = []
+    browser_ok = start_browser()
+    print(f"Playwright browser available: {browser_ok}")
 
-    for name, scraper in SCRAPERS.items():
-        try:
-            listings = scraper()
-        except Exception as e:
-            print(f"{name}: scrape failed - {e}")
-            continue
+    try:
+        seen = load_seen()
+        first_run = len(seen) == 0
+        new_seen = set(seen)
+        new_matches = []
 
-        print(f"{name}: found {len(listings)} listing(s) on the page(s) checked")
-
-        for item in listings:
-            url, price = item["url"], item["price"]
-            if url in seen:
+        for name, scraper in SCRAPERS.items():
+            try:
+                listings = scraper()
+            except Exception as e:
+                print(f"{name}: scrape failed - {e}")
                 continue
-            new_seen.add(url)
-            if first_run:
-                continue
-            if price is not None and price > MAX_PRICE:
-                continue
-            price_txt = f"€{price}" if price is not None else "price unknown"
-            new_matches.append(f"New listing on {name} - {price_txt}\n{url}")
 
-    if first_run:
-        print("First run: recorded current listings as the baseline. "
-              "No notifications sent this time - future new listings will alert.")
-    elif new_matches:
-        for msg in new_matches:
-            send_telegram(msg)
-        print(f"Sent {len(new_matches)} notification(s).")
-    else:
-        print("No new matching listings this run.")
+            print(f"{name}: found {len(listings)} listing(s) on the page(s) checked")
 
-    save_seen(new_seen)
+            for item in listings:
+                url, price = item["url"], item["price"]
+                if url in seen:
+                    continue
+                new_seen.add(url)
+                if first_run:
+                    continue  # don't flood alerts for pre-existing listings
+                if price is not None and price > MAX_PRICE:
+                    continue
+                price_txt = f"€{price}" if price is not None else "price unknown"
+                new_matches.append(f"New listing on {name} - {price_txt}\n{url}")
+
+            # be a little polite between sites, especially the browser-rendered ones
+            time.sleep(random.uniform(0.5, 1.5))
+
+        if first_run:
+            print("First run: recorded current listings as the baseline. "
+                  "No notifications sent this time - future new listings will alert.")
+        elif new_matches:
+            for msg in new_matches:
+                send_telegram(msg)
+            print(f"Sent {len(new_matches)} notification(s).")
+        else:
+            print("No new matching listings this run.")
+
+        save_seen(new_seen)
+
+    finally:
+        stop_browser()
 
 
 if __name__ == "__main__":

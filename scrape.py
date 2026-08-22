@@ -238,10 +238,19 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude
     """Precise extractor for sites where we know the exact detail-page URL
     pattern. Climbs from each matching link up to the nearest ancestor
     that contains a euro sign, to read the price without needing CSS
-    class names (which change often)."""
+    class names (which change often).
+
+    Safety guard: never climb into a container that wraps more than one
+    matching listing link - that means we've gone past this listing's own
+    card into a shared grid/list wrapper, which would let another
+    listing's city or price bleed into this one's data (a real bug we hit:
+    a Rijswijk-area filter was passing Maastricht listings because the
+    climb reached a container that also contained a Rijswijk-area entry
+    elsewhere on the page)."""
     soup = BeautifulSoup(html, "html.parser")
+    compiled_pattern = re.compile(url_pattern)
     results = {}
-    for a in soup.find_all("a", href=re.compile(url_pattern)):
+    for a in soup.find_all("a", href=compiled_pattern):
         href = urljoin(base_url, a["href"])
 
         text = a.get_text(" ", strip=True)
@@ -251,7 +260,11 @@ def find_listings(html, base_url, url_pattern, require_any_keyword=None, exclude
                 break
             if container.parent is None:
                 break
-            container = container.parent
+            candidate = container.parent
+            matches_here = candidate.find_all("a", href=compiled_pattern)
+            if len(matches_here) > 1:
+                break  # shared container wrapping multiple listings - stop, don't use it
+            container = candidate
             text = container.get_text(" ", strip=True)
 
         text_low = text.lower()
@@ -271,26 +284,36 @@ def find_listings_generic(html, base_url, require_any_keyword=None):
     """Fallback extractor for sites we've never test-scraped and don't
     know exact URL patterns for. Keeps any same-domain link that isn't
     obvious navigation junk and has a euro sign somewhere in its nearby
-    text - structural signal instead of guessed CSS classes or paths."""
+    text - structural signal instead of guessed CSS classes or paths.
+
+    Same shared-container safety guard as find_listings() above: never
+    climb into an ancestor that contains more than one "real" listing
+    link (same-domain, non-nav-junk), to avoid mixing data from
+    neighboring listings."""
     soup = BeautifulSoup(html, "html.parser")
     base_domain = urlparse(base_url).netloc
     results = {}
 
-    for a in soup.find_all("a", href=True):
-        href = a["href"].strip()
-        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-            continue
-
-        full = urljoin(base_url, href)
-        parsed = urlparse(full)
-        if parsed.netloc != base_domain:
-            continue
-
-        path_low = parsed.path.lower()
+    def is_real_listing_link(tag):
+        h = tag.get("href", "").strip()
+        if not h or h.startswith(("#", "javascript:", "mailto:", "tel:")):
+            return False
+        f = urljoin(base_url, h)
+        p = urlparse(f)
+        if p.netloc != base_domain:
+            return False
+        path_low = p.path.lower()
         if any(f"/{kw}" in path_low or path_low.strip("/") == kw for kw in NAV_PATH_EXCLUDE):
+            return False
+        if len(p.path.strip("/")) < 3:
+            return False
+        return True
+
+    for a in soup.find_all("a", href=True):
+        if not is_real_listing_link(a):
             continue
-        if len(parsed.path.strip("/")) < 3:
-            continue  # homepage or near-empty path, not a listing
+
+        full = urljoin(base_url, a["href"].strip())
 
         text = a.get_text(" ", strip=True)
         container = a
@@ -299,7 +322,11 @@ def find_listings_generic(html, base_url, require_any_keyword=None):
                 break
             if container.parent is None:
                 break
-            container = container.parent
+            candidate = container.parent
+            other_real_links = [t for t in candidate.find_all("a", href=True) if is_real_listing_link(t)]
+            if len(other_real_links) > 1:
+                break  # shared container wrapping multiple listings - stop, don't use it
+            container = candidate
             text = container.get_text(" ", strip=True)
 
         if "€" not in text:

@@ -33,7 +33,17 @@ SESSION.headers.update({
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
     "Accept-Language": "nl-NL,nl;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
     "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0",
+    "sec-ch-ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
 })
 
 
@@ -175,7 +185,7 @@ def scrape_huurwoningen():
     base = SOURCES["huurwoningen"]
     all_listings = []
 
-    html = fetch(base)
+    html = fetch(base, warm_up_url="https://www.huurwoningen.nl/")
     all_listings.extend(
         find_listings(html, base, r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/",
                       require_any_keyword=NEARBY_TOWNS)

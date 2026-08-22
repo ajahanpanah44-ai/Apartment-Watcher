@@ -6,7 +6,7 @@ from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
 
-MAX_PRICE = 2000
+MAX_PRICE = 1700
 
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",

@@ -556,7 +556,18 @@ def scrape_funda():
     pattern = r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/"
     try:
         html = fetch(url, warm_up_url="https://www.funda.nl/")
-        return find_listings(html, url, pattern)
+        results = find_listings(html, url, pattern)
+        if results:
+            return results
+        # Got a normal response but zero matches - could be a genuine empty
+        # result, or a soft block serving different (emptier) content to a
+        # plain script than a real browser sees. Worth double-checking with
+        # the real browser rather than silently trusting a suspicious zero.
+        if _PLAYWRIGHT_CTX["available"]:
+            print("  Funda: plain request returned 0 results, double-checking with real browser...")
+            html = render_with_retry(url)
+            return find_listings(html, url, pattern)
+        return results
     except requests.exceptions.HTTPError:
         if _PLAYWRIGHT_CTX["available"]:
             print("  Funda: plain request blocked, retrying with real browser...")

@@ -24,7 +24,7 @@ NEARBY_TOWNS = [
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
-    "funda": "https://www.funda.nl/zoeken/huur/?selected_area=%5B%22rijswijk-zh%22%5D",
+    "funda": "https://www.funda.nl/zoeken/huur?selected_area=rijswijk-zh&price=900-1700&object_type=apartment",
     "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
     "huurwoningen": "https://www.huurwoningen.nl/in/rijswijk/?price=600-1750&radius=5&filters%5Boffer_type%5D%5B0%5D=none",
     "nationaalgrondbezit": "https://nationaalgrondbezit.nl/huuraanbod",

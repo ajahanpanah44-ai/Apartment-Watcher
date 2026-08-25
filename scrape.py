@@ -24,7 +24,6 @@ NEARBY_TOWNS = [
 SOURCES = {
     "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
-    "funda": "https://www.funda.nl/zoeken/huur?selected_area=rijswijk-zh&price=900-1700&object_type=apartment",
     "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
     "huurwoningen": "https://www.huurwoningen.nl/in/rijswijk/?price=600-1750&radius=5&filters%5Boffer_type%5D%5B0%5D=none",
     "nationaalgrondbezit": "https://nationaalgrondbezit.nl/huuraanbod",
@@ -159,7 +158,7 @@ def send_telegram(text):
 def build_welcome_text():
     return (
         "Hi! 👋 I'm your Rijswijk apartment watcher.\n\n"
-        f"I check {len(SCRAPERS)} rental sites every 15 minutes - Pararius, VBT, Funda, "
+        f"I check {len(SCRAPERS)} rental sites every 15 minutes - Pararius, VBT, "
         "123Wonen, Huurwoningen.nl, NationaalGrondbezit, Devilee, Real Estate Partners, "
         "Bjornd, Verra, Vesteda, Oost West, REBO, and Schep - and I'll message you the "
         f"moment something new shows up under €{MAX_PRICE}, roughly within 10km of Rijswijk.\n\n"
@@ -551,36 +550,11 @@ def scrape_vbt():
     return all_listings
 
 
-def scrape_funda():
-    url = SOURCES["funda"]
-    pattern = r"/detail/huur/[a-z0-9-]+/[a-z0-9-]+/\d+/"
-    try:
-        html = fetch(url, warm_up_url="https://www.funda.nl/")
-        results = find_listings(html, url, pattern)
-        if results:
-            return results
-        # Got a normal response but zero matches - could be a genuine empty
-        # result, or a soft block serving different (emptier) content to a
-        # plain script than a real browser sees. Worth double-checking with
-        # the real browser rather than silently trusting a suspicious zero.
-        if _PLAYWRIGHT_CTX["available"]:
-            print("  Funda: plain request returned 0 results, double-checking with real browser...")
-            html = render_with_retry(url)
-            return find_listings(html, url, pattern)
-        return results
-    except requests.exceptions.HTTPError:
-        if _PLAYWRIGHT_CTX["available"]:
-            print("  Funda: plain request blocked, retrying with real browser...")
-            html = render_with_retry(url)
-            return find_listings(html, url, pattern)
-        raise
-
-
 def scrape_123wonen():
     url = SOURCES["123wonen"]
     html = fetch(url, warm_up_url="https://www.123wonen.nl/")
     return find_listings(
-        html, url, r"/huur/[a-z0-9+%.-]+/[a-z0-9+%.-]+/[a-z0-9+%.-]+",
+        html, url, r"/huur/[a-z0-9+%.-]+/[a-z0-9+%.-]+/[a-z0-9+%.-]+-\d+-\d+",
         require_any_keyword=NEARBY_TOWNS,
         exclude_any_keyword=["verhuurd"],
     )
@@ -633,7 +607,6 @@ def scrape_nationaalgrondbezit():
 SCRAPERS = {
     "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
-    "Funda": scrape_funda,
     "123Wonen": scrape_123wonen,
     "Huurwoningen.nl": scrape_huurwoningen,
     "NationaalGrondbezit": scrape_nationaalgrondbezit,

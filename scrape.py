@@ -469,10 +469,11 @@ REALMARK_SITES = {
 # generic (best-effort) extractor since we don't have a confirmed exact
 # URL pattern for them - worth spot-checking their results occasionally.
 OTHER_JS_SITES = {
-    "Vesteda": (
+    "Vesteda": "https://www.vesteda.com/nl/huurwoningen-rijswijk",
+    "VestedaSearch": (
         "https://www.vesteda.com/nl/woning-zoeken?placeType=1&sortType=0"
-        "&radius=10&s=Rijswijk%2C+Nederland&sc=woning"
-        "&latitude=52.035576&longitude=4.3128963&filters=&priceFrom=0&priceTo=1700"
+        "&radius=10&s=Rijswijk,+Nederland&sc=woning"
+        "&latitude=52.037697&longitude=4.321974&filters=&priceFrom=500&priceTo=9999"
     ),
     "OostWest": "https://oostwestmakelaars.nl/en/huur",
     "REBO": "https://www.rebogroep.nl/nl/particulier/ons-aanbod/huren",

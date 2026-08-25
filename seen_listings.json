@@ -238,6 +238,7 @@
     "https://www.vesteda.com/nl/huurwoningen-den-haag/westkapellelaan/domburglaan-48-s-gravenhage-18863",
     "https://www.vesteda.com/nl/huurwoningen-leidschendam/t-lien/schadeken-161-leidschendam-2085",
     "https://www.vesteda.com/nl/huurwoningen-pijnacker/keijzershof/vossenzoom-313-pijnacker-10662",
+    "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-523-rijswijk-440",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-593-rijswijk-278",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-597-rijswijk-101",
@@ -246,6 +247,7 @@
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-767-rijswijk-496",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-773-rijswijk-580",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/churchilllaan/sir-winston-churchillln-781-rijswijk-299",
+    "https://www.vesteda.com/nl/huurwoningen-rijswijk/over-de-bogaard",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/over-de-bogaard/hilvoordestraat-159-rijswijk-744",
     "https://www.vesteda.com/nl/huurwoningen-rijswijk/over-de-bogaard/hilvoordestraat-223-rijswijk-522",
     "https://www.vesteda.com/nl/huurwoningen-voorburg/distelweide",
@@ -274,7 +276,8 @@
     "Schep",
     "VBT",
     "Verra",
-    "Vesteda"
+    "Vesteda",
+    "VestedaSearch"
   ],
   "last_update_id": 135859075
 }

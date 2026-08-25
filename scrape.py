@@ -22,10 +22,8 @@ NEARBY_TOWNS = [
 
 # Fast, lightweight sources - plain HTTP requests, no browser needed.
 SOURCES = {
-    "pararius": "https://www.pararius.nl/huurwoningen/rijswijk/10km",
     "vbt": "https://vbtverhuurmakelaars.nl/woningen",
     "123wonen": "https://www.123wonen.nl/huurwoningen/in/rijswijk",
-    "huurwoningen": "https://www.huurwoningen.nl/in/rijswijk/?price=600-1750&radius=5&filters%5Boffer_type%5D%5B0%5D=none",
     "nationaalgrondbezit": "https://nationaalgrondbezit.nl/huuraanbod",
 }
 
@@ -158,8 +156,8 @@ def send_telegram(text):
 def build_welcome_text():
     return (
         "Hi! 👋 I'm your Rijswijk apartment watcher.\n\n"
-        f"I check {len(SCRAPERS)} rental sites every 15 minutes - Pararius, VBT, "
-        "123Wonen, Huurwoningen.nl, NationaalGrondbezit, Devilee, Real Estate Partners, "
+        f"I check {len(SCRAPERS)} rental sites every 15 minutes - VBT, "
+        "123Wonen, NationaalGrondbezit, Devilee, Real Estate Partners, "
         "Bjornd, Verra, Vesteda, Oost West, REBO, and Schep - and I'll message you the "
         f"moment something new shows up under €{MAX_PRICE}, roughly within 10km of Rijswijk.\n\n"
         "No need to do anything else - just leave me running."
@@ -511,20 +509,6 @@ def scrape_schep():
 # fallback will also fail and get logged, which is expected.
 # ---------------------------------------------------------------------------
 
-def scrape_pararius():
-    url = SOURCES["pararius"]
-    pattern = r"/(appartement|huis|studio|kamer)-te-huur/"
-    try:
-        html = fetch(url, warm_up_url="https://www.pararius.nl/")
-        return find_listings(html, url, pattern)
-    except requests.exceptions.HTTPError:
-        if _PLAYWRIGHT_CTX["available"]:
-            print("  Pararius: plain request blocked, retrying with real browser...")
-            html = render_with_retry(url)
-            return find_listings(html, url, pattern)
-        raise
-
-
 def scrape_vbt():
     base = SOURCES["vbt"]
     all_listings = []
@@ -560,37 +544,6 @@ def scrape_123wonen():
     )
 
 
-def scrape_huurwoningen():
-    base = SOURCES["huurwoningen"]
-    pattern = r"/huren/[a-z-]+/[0-9a-f]{6,10}/[a-z0-9-]+/"
-    all_listings = []
-    try:
-        html = fetch(base, warm_up_url="https://www.huurwoningen.nl/")
-    except requests.exceptions.HTTPError:
-        if _PLAYWRIGHT_CTX["available"]:
-            print("  Huurwoningen.nl: plain request blocked, retrying with real browser...")
-            html = render_with_retry(base)
-        else:
-            raise
-
-    all_listings.extend(find_listings(html, base, pattern, require_any_keyword=NEARBY_TOWNS))
-
-    for page in range(2, 4):
-        try:
-            page_html = fetch(f"{base}&page={page}", referer=base)
-            page_listings = find_listings(
-                page_html, base, pattern, require_any_keyword=NEARBY_TOWNS,
-            )
-            if not page_listings:
-                break
-            all_listings.extend(page_listings)
-        except Exception as e:
-            print("huurwoningen.nl pagination stopped early:", e)
-            break
-
-    return all_listings
-
-
 def scrape_nationaalgrondbezit():
     url = SOURCES["nationaalgrondbezit"]
     html = fetch(url)
@@ -605,10 +558,8 @@ def scrape_nationaalgrondbezit():
 # ---------------------------------------------------------------------------
 
 SCRAPERS = {
-    "Pararius": scrape_pararius,
     "VBT": scrape_vbt,
     "123Wonen": scrape_123wonen,
-    "Huurwoningen.nl": scrape_huurwoningen,
     "NationaalGrondbezit": scrape_nationaalgrondbezit,
 }
 

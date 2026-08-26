@@ -381,9 +381,12 @@ def stop_browser():
         pass
 
 
-def render_page(url, wait_ms=3500, timeout_ms=45000):
+def render_page(url, wait_ms=5000, timeout_ms=45000):
     """Load a URL in a real (headless) browser and return the fully
-    rendered HTML, including anything built by client-side JavaScript."""
+    rendered HTML, including anything built by client-side JavaScript.
+    Scrolls through the page to trigger any lazy-loaded sections (common
+    on sites with below-the-fold listing grids that only fetch their data
+    once scrolled into view) rather than only waiting at the top."""
     if not _PLAYWRIGHT_CTX["available"]:
         raise RuntimeError("Playwright browser is not available")
 
@@ -403,7 +406,18 @@ def render_page(url, wait_ms=3500, timeout_ms=45000):
         page.goto(url, wait_until="networkidle", timeout=timeout_ms)
     except Exception as e:
         print(f"  (render warning for {url}: {e}, using what loaded so far)")
-    page.wait_for_timeout(wait_ms)
+
+    page.wait_for_timeout(wait_ms // 2)
+    try:
+        # scroll down in a few steps to trigger any lazy-loaded/below-the-
+        # fold content, pausing briefly between steps for it to fetch/render
+        for _ in range(4):
+            page.mouse.wheel(0, 1200)
+            page.wait_for_timeout(500)
+    except Exception:
+        pass
+    page.wait_for_timeout(wait_ms // 2)
+
     html = page.content()
     context.close()
     return html

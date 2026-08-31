@@ -64,6 +64,9 @@ NAV_PATH_EXCLUDE = [
     "sale", "koop", "kopen", "sold", "verkocht", "login", "inloggen",
     "registreren", "account", "sitemap", "algemene-voorwaarden",
     "disclaimer", "privacybeleid", "werkwijze", "vestig",
+    "aanbod.dc.html", "blog", "klantverhalen", "diensten", "downloads",
+    "informatie-voor-schuldenaren", "klachtenregeling", "stappen",
+    "favorieten", "zoekprofiel", "vragen", "protocol", "home",
 ]
 
 
@@ -300,9 +303,21 @@ def find_listings_generic(html, base_url, require_any_keyword=None):
         if p.netloc != base_domain:
             return False
         path_low = p.path.lower()
-        if any(f"/{kw}" in path_low or path_low.strip("/") == kw for kw in NAV_PATH_EXCLUDE):
+        if any(re.search(rf"\b{re.escape(kw)}\b", path_low) for kw in NAV_PATH_EXCLUDE):
             return False
         if len(p.path.strip("/")) < 3:
+            return False
+        # Real listings virtually always have a street number, unit number,
+        # or numeric ID somewhere in the URL. Nav/service/blog/FAQ pages
+        # almost never do. This one check is far more reliable than trying
+        # to blacklist every site's specific menu wording (which we proved
+        # doesn't scale - real junk like "informatie-voor-schuldenaren" and
+        # "klachtenregeling" slipped through the old blacklist).
+        if not any(ch.isdigit() for ch in p.path):
+            return False
+        # File downloads (PDFs, etc.) aren't listings even if they happen
+        # to contain a digit somewhere in the filename.
+        if path_low.endswith((".pdf", ".doc", ".docx", ".xls", ".xlsx", ".zip")):
             return False
         return True
 
